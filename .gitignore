@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+*.log
+*.png
+*_state.json
+ingest_state.json
