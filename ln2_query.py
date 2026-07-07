@@ -9,8 +9,11 @@ import sys
 import re
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 import psycopg2
+
+LOCAL_TZ = ZoneInfo("America/Chicago")
 
 sys.path.insert(0, str(Path(__file__).parent))
 import ln2_config as config
@@ -106,13 +109,15 @@ def plot_weight(minutes: float = 120) -> tuple:
     if not rows:
         return None, "No LN2 data in that time range."
 
-    times   = [r[0] for r in rows]
+    # Convert to local wall-clock time so the axis isn't shown in UTC (which
+    # looks ~5 h in the "future" against CDT).
+    times   = [r[0].astimezone(LOCAL_TZ).replace(tzinfo=None) for r in rows]
     weights = [r[1] for r in rows]
     fig, ax = plt.subplots(figsize=(10, 4))
     ax.plot(times, weights, "-", color="#1f77b4", linewidth=1.3)
     rng = f"{minutes/1440:g} days" if minutes >= 1440 else \
           f"{minutes/60:g} h" if minutes >= 60 else f"{minutes:g} min"
-    ax.set_title(f"LN2 Scale Weight — last {rng}  ({len(rows)} points)")
+    ax.set_title(f"LN2 Scale Weight — last {rng} (CDT)  ({len(rows)} points)")
     ax.set_ylabel(f"Weight ({config.WEIGHT_UNIT})")
     ax.grid(True, alpha=0.3)
     ax.xaxis.set_major_formatter(mdates.DateFormatter("%m-%d %H:%M"))
