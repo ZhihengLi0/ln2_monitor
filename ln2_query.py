@@ -86,8 +86,18 @@ def status_text() -> str:
             f"_at {str(ts)[:19]}_{fresh}")
 
 
-def plot_weight(minutes: float = 120) -> tuple:
-    """Return (image_path, caption) for a weight-vs-time plot, or (None, msg)."""
+# Which quantity to plot: (db_column, label, unit). Weight unit comes from config.
+def _quantity(text: str):
+    t = text.lower()
+    if re.search(r"temp|温度", t):
+        return "temp", "Temperature", "°C"
+    if re.search(r"humid|湿度|潮", t):
+        return "humidity", "Humidity", "%"
+    return "weight", "Weight", config.WEIGHT_UNIT
+
+
+def plot_quantity(column: str, label: str, unit: str, minutes: float = 120) -> tuple:
+    """Return (image_path, caption) for a <column>-vs-time plot, or (None, msg)."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -99,7 +109,7 @@ def plot_weight(minutes: float = 120) -> tuple:
         return None, f":warning: Cannot read LN2 database: {e}"
     try:
         with conn.cursor() as cur:
-            cur.execute("SELECT time, weight FROM scale_readings "
+            cur.execute(f"SELECT time, {column} FROM scale_readings "
                         "WHERE time >= now() - (%s || ' minutes')::interval "
                         "ORDER BY time", (minutes,))
             rows = cur.fetchall()
@@ -111,21 +121,21 @@ def plot_weight(minutes: float = 120) -> tuple:
 
     # Convert to local wall-clock time so the axis isn't shown in UTC (which
     # looks ~5 h in the "future" against CDT).
-    times   = [r[0].astimezone(LOCAL_TZ).replace(tzinfo=None) for r in rows]
-    weights = [r[1] for r in rows]
+    times = [r[0].astimezone(LOCAL_TZ).replace(tzinfo=None) for r in rows]
+    vals  = [r[1] for r in rows]
     fig, ax = plt.subplots(figsize=(10, 4))
-    ax.plot(times, weights, "-", color="#1f77b4", linewidth=1.3)
+    ax.plot(times, vals, "-", color="#1f77b4", linewidth=1.3)
     rng = f"{minutes/1440:g} days" if minutes >= 1440 else \
           f"{minutes/60:g} h" if minutes >= 60 else f"{minutes:g} min"
-    ax.set_title(f"LN2 Scale Weight — last {rng} (CDT)  ({len(rows)} points)")
-    ax.set_ylabel(f"Weight ({config.WEIGHT_UNIT})")
+    ax.set_title(f"LN2 Scale {label} — last {rng} (CDT)  ({len(rows)} points)")
+    ax.set_ylabel(f"{label} ({unit})")
     ax.grid(True, alpha=0.3)
     ax.xaxis.set_major_formatter(mdates.DateFormatter("%m-%d %H:%M"))
     fig.autofmt_xdate()
-    out = Path(__file__).parent / "ln2_weight.png"
+    out = Path(__file__).parent / f"ln2_{column}.png"
     fig.savefig(out, dpi=110, bbox_inches="tight")
     plt.close(fig)
-    return str(out), f"LN2 weight — last {rng}"
+    return str(out), f"LN2 {label.lower()} — last {rng}"
 
 
 def handle(text: str):
@@ -136,5 +146,6 @@ def handle(text: str):
         if m:
             n, unit = float(m.group(1)), m.group(2).lower()
             minutes = n * (1440 if unit.startswith("d") else 60 if unit.startswith("h") else 1)
-        return "plot", plot_weight(minutes)
+        column, label, u = _quantity(text)
+        return "plot", plot_quantity(column, label, u, minutes)
     return "text", status_text()
