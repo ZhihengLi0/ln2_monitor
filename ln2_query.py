@@ -61,6 +61,27 @@ def _weight_ago(cur, minutes):
     return r[0] if r else None
 
 
+def latest_dewpoint():
+    """Return (dew_point_C, temp_C, humidity, ts) for the latest LN2 reading,
+    or None. Used by the fridge monitor for the coolant-in vs dew-point alarm."""
+    try:
+        conn = _conn()
+    except Exception:
+        return None
+    try:
+        with conn.cursor() as cur:
+            row = _latest(cur)
+    finally:
+        conn.close()
+    if not row:
+        return None
+    ts, weight, temp, humidity = row
+    dp = dew_point(temp, humidity)
+    if dp is None:
+        return None
+    return dp, temp, humidity, ts
+
+
 def status_text() -> str:
     """Current LN2 scale reading + 1-hour weight trend."""
     u = config.WEIGHT_UNIT
