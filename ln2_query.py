@@ -7,6 +7,7 @@ Public functions return ready-to-send Slack text (or an image path for plots).
 
 import sys
 import re
+import math
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -14,6 +15,16 @@ from zoneinfo import ZoneInfo
 import psycopg2
 
 LOCAL_TZ = ZoneInfo("America/Chicago")
+
+
+def dew_point(temp_c, rh):
+    """Dew point (°C) from temperature (°C) and relative humidity (%),
+    via the Magnus-Tetens approximation. Returns None if inputs are invalid."""
+    if temp_c is None or rh is None or rh <= 0:
+        return None
+    a, b = 17.62, 243.12
+    gamma = math.log(rh / 100.0) + (a * temp_c) / (b + temp_c)
+    return (b * gamma) / (a - gamma)
 
 sys.path.insert(0, str(Path(__file__).parent))
 import ln2_config as config
@@ -79,10 +90,14 @@ def status_text() -> str:
         arrow = ":arrow_up:" if d > 0.001 else ":arrow_down:" if d < -0.001 else ":left_right_arrow:"
         trend = f"\n  • 1 h change: {arrow} `{d:+.2f} {u}`"
 
+    dp = dew_point(temp, humidity)
+    dp_line = f"\n  • Dew point: `{dp:.1f} °C`" if dp is not None else ""
+
     return (":balance_scale: *LN2 Scale — current reading*\n"
             f"  • Weight: `{weight:g} {u}`\n"
             f"  • Temperature: `{temp:g} °C`\n"
-            f"  • Humidity: `{humidity:g} %`{trend}\n"
+            f"  • Humidity: `{humidity:g} %`"
+            f"{dp_line}{trend}\n"
             f"_at {str(ts)[:19]}_{fresh}")
 
 
