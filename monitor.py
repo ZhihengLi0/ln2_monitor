@@ -21,6 +21,7 @@ from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, str(Path(__file__).parent))
 import ln2_config as config
+from ln2_query import dew_point
 
 STATUS_MODE = "--status" in sys.argv
 
@@ -142,6 +143,13 @@ def check_reading(conn, state: dict) -> list:
         if _cooldown_ok(state, "temp_low"):
             alerts.append((f":warning: *Temperature low* — `{temp:g} °C` "
                            f"(below {config.TEMP_LOW:g} °C).", "warning"))
+
+    # Dew point (condensation / frost risk)
+    dp = dew_point(temp, humidity)
+    if dp is not None and config.DEW_POINT_HIGH is not None and dp > config.DEW_POINT_HIGH:
+        if _cooldown_ok(state, "dew_high"):
+            alerts.append((f":warning: *Dew point high* — `{dp:.1f} °C` "
+                           f"(above {config.DEW_POINT_HIGH:g} °C — condensation risk).", "warning"))
     return alerts
 
 
@@ -152,10 +160,12 @@ def post_status(conn):
         return
     ts, weight, temp, humidity = row
     u = config.WEIGHT_UNIT
+    dp = dew_point(temp, humidity)
+    dp_line = f"\n  • Dew point: `{dp:.1f} °C`" if dp is not None else ""
     msg = (":balance_scale: *LN2 Scale — current reading*\n"
            f"  • Weight: `{weight:g} {u}`\n"
            f"  • Temperature: `{temp:g} °C`\n"
-           f"  • Humidity: `{humidity:g} %`\n"
+           f"  • Humidity: `{humidity:g} %`{dp_line}\n"
            f"_at {str(ts)[:19]}_")
     send_slack(msg, color="#2196F3")
     log.info("Posted LN2 status")

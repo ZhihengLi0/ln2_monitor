@@ -102,8 +102,11 @@ def status_text() -> str:
 
 
 # Which quantity to plot: (db_column, label, unit). Weight unit comes from config.
+# "dewpoint" is computed from temp + humidity rather than being a column.
 def _quantity(text: str):
     t = text.lower()
+    if re.search(r"dew|露点", t):
+        return "dewpoint", "Dew Point", "°C"
     if re.search(r"temp|温度", t):
         return "temp", "Temperature", "°C"
     if re.search(r"humid|湿度|潮", t):
@@ -124,10 +127,17 @@ def plot_quantity(column: str, label: str, unit: str, minutes: float = 120) -> t
         return None, f":warning: Cannot read LN2 database: {e}"
     try:
         with conn.cursor() as cur:
-            cur.execute(f"SELECT time, {column} FROM scale_readings "
-                        "WHERE time >= now() - (%s || ' minutes')::interval "
-                        "ORDER BY time", (minutes,))
-            rows = cur.fetchall()
+            if column == "dewpoint":
+                cur.execute("SELECT time, temp, humidity FROM scale_readings "
+                            "WHERE time >= now() - (%s || ' minutes')::interval "
+                            "ORDER BY time", (minutes,))
+                rows = [(t, dew_point(tp, h)) for t, tp, h in cur.fetchall()]
+                rows = [r for r in rows if r[1] is not None]
+            else:
+                cur.execute(f"SELECT time, {column} FROM scale_readings "
+                            "WHERE time >= now() - (%s || ' minutes')::interval "
+                            "ORDER BY time", (minutes,))
+                rows = cur.fetchall()
     finally:
         conn.close()
 

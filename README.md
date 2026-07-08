@@ -58,8 +58,9 @@ All via `@BlueFors-Alert` in the shared channel — natural language works:
 
 | Command | Description |
 |---|---|
-| `ln2` · `how much liquid nitrogen` · `液氮还剩多少` · `weight` | Current weight, temperature, humidity + 1-hour weight trend |
+| `ln2` · `how much liquid nitrogen` · `液氮还剩多少` · `weight` | Current weight, temperature, humidity, **dew point** + 1-hour weight trend |
 | `plot ln2 weight 6h` · `液氮曲线 2h` | Weight-vs-time chart (min / hour / day) |
+| `plot ln2 temperature 2h` · `plot ln2 humidity` · `plot ln2 dewpoint` | Plot temperature / humidity / dew point vs time |
 
 Keywords that route to this system: `ln2`, `nitrogen`, `weight`, `scale`, 液氮,
 氮, 秤, 重量, 称重.

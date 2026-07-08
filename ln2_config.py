@@ -38,6 +38,7 @@ WEIGHT_LOW         = None    # alert when weight < this (time to refill LN2)
 WEIGHT_CRITICAL    = None    # critical when weight < this
 TEMP_HIGH          = None    # alert when temperature > this (°C)
 TEMP_LOW           = None    # alert when temperature < this (°C)
+DEW_POINT_HIGH     = None    # alert when dew point > this (°C) — condensation risk
 
 # Minutes before the same alert can fire again
 ALERT_COOLDOWN_MINUTES = 30
