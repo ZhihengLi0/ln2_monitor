@@ -34,7 +34,7 @@ ARDUINO_FILE = "/home/cdms/arduino_data.txt"
 # Weight unit is whatever the Arduino prints (assumed kg). Set to None to disable
 # a given check.
 WEIGHT_UNIT        = "kg"
-WEIGHT_LOW         = None    # alert when weight < this (time to refill LN2)
+WEIGHT_LOW         = -2.5    # alert when weight < this (time to refill LN2)
 WEIGHT_CRITICAL    = None    # critical when weight < this
 TEMP_HIGH          = None    # alert when temperature > this (°C)
 TEMP_LOW           = None    # alert when temperature < this (°C)
