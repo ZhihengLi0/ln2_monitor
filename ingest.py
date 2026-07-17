@@ -22,11 +22,13 @@ import psycopg2
 sys.path.insert(0, str(Path(__file__).parent))
 import ln2_config as config
 
+_handlers = [logging.FileHandler(Path(__file__).parent / "ingest.log")]
+if sys.stdout.isatty():                       # console only when run interactively
+    _handlers.append(logging.StreamHandler())
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [ln2-ingest] %(levelname)s %(message)s",
-    handlers=[logging.FileHandler(Path(__file__).parent / "ingest.log"),
-              logging.StreamHandler()],
+    handlers=_handlers,
 )
 log = logging.getLogger("ln2-ingest")
 
