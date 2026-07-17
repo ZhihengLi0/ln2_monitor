@@ -80,7 +80,15 @@ def save_state(state: dict):
     tmp.replace(STATE_FILE)
 
 
+def _silenced(state: dict, key: str) -> bool:
+    """True if this alarm is silenced (silence_until in the future)."""
+    su = state.get("silence_until", {}).get(key)
+    return bool(su and datetime.fromisoformat(su) > datetime.now())
+
+
 def _cooldown_ok(state: dict, key: str) -> bool:
+    if _silenced(state, key):
+        return False
     last = state.get("last_alert_time", {}).get(key)
     if last:
         if datetime.now() - datetime.fromisoformat(last) < timedelta(
