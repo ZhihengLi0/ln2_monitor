@@ -81,9 +81,15 @@ def save_state(state: dict):
 
 
 def _silenced(state: dict, key: str) -> bool:
-    """True if this alarm is silenced (silence_until in the future)."""
-    su = state.get("silence_until", {}).get(key)
-    return bool(su and datetime.fromisoformat(su) > datetime.now())
+    """True if this alarm is silenced — either its own key or the global
+    '__all__' key has a silence_until in the future."""
+    su_map = state.get("silence_until", {})
+    now = datetime.now()
+    for k in (key, "__all__"):
+        su = su_map.get(k)
+        if su and datetime.fromisoformat(su) > now:
+            return True
+    return False
 
 
 def _cooldown_ok(state: dict, key: str) -> bool:

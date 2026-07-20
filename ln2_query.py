@@ -39,6 +39,62 @@ LN2_RE = re.compile(
 PLOT_RE = re.compile(r"\bplot\b|\bgraph\b|\btrend\b|\bchart\b|图|曲线|趋势", re.IGNORECASE)
 # Duration like 2h / 30min / 3 days
 DUR_RE = re.compile(r"(\d+(?:\.\d+)?)\s*(days?|d|hours?|hrs?|h|minutes?|mins?|min|m)\b", re.I)
+# Silence / mute the LN2 alarms
+SILENCE_RE = re.compile(r"silence|mute|quiet|snooze|stop.*alert|静音|安静|别报|停止", re.IGNORECASE)
+UNSILENCE_RE = re.compile(r"unsilence|unmute|resume|un-?silence|恢复|取消静音|解除", re.IGNORECASE)
+
+STATE_FILE = Path(__file__).parent / "monitor_state.json"
+
+
+def _parse_duration_minutes(text: str):
+    """Minutes from a phrase like '2h', '30 min', '2 days'. Default 120 if a
+    silence keyword is present but no duration. Returns None if unparseable."""
+    m = DUR_RE.search(text)
+    if not m:
+        return 120.0
+    n, unit = float(m.group(1)), m.group(2).lower()
+    if unit.startswith("d"):
+        return n * 1440
+    if unit.startswith("h") or unit.startswith("hr"):
+        return n * 60
+    return n
+
+
+def silence_alarms(minutes: float) -> str:
+    """Silence ALL LN2 alarms for `minutes` by writing silence_until into the
+    ln2 monitor state file (the ln2 cron reads it each run). Returns Slack text."""
+    import json
+    try:
+        state = json.loads(STATE_FILE.read_text()) if STATE_FILE.exists() else {}
+    except Exception:
+        state = {}
+    until = datetime.now() + timedelta(minutes=minutes)
+    state.setdefault("silence_until", {})["__all__"] = until.isoformat()
+    tmp = STATE_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(state, default=str, indent=2))
+    tmp.replace(STATE_FILE)
+    if minutes >= 1440:
+        dur = f"{minutes/1440:g} day(s)"
+    elif minutes >= 60:
+        dur = f"{minutes/60:g} hour(s)"
+    else:
+        dur = f"{minutes:g} min"
+    return (f":no_bell: *LN2 alarms silenced for {dur}* (until "
+            f"{until.astimezone(LOCAL_TZ).strftime('%m-%d %H:%M')} CDT).\n"
+            "Say `resume LN2 alerts` to re-enable early.")
+
+
+def unsilence_alarms() -> str:
+    import json
+    try:
+        state = json.loads(STATE_FILE.read_text()) if STATE_FILE.exists() else {}
+    except Exception:
+        state = {}
+    state.setdefault("silence_until", {}).pop("__all__", None)
+    tmp = STATE_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(state, default=str, indent=2))
+    tmp.replace(STATE_FILE)
+    return ":bell: *LN2 alarms re-enabled.*"
 
 
 def _conn():
@@ -186,6 +242,11 @@ def plot_quantity(column: str, label: str, unit: str, minutes: float = 120) -> t
 
 def handle(text: str):
     """Route an LN2 request. Returns ('text', str) or ('plot', (path, caption))."""
+    # Silence / resume (check before plot so 'stop LN2 alerts' isn't a plot).
+    if UNSILENCE_RE.search(text):
+        return "text", unsilence_alarms()
+    if SILENCE_RE.search(text):
+        return "text", silence_alarms(_parse_duration_minutes(text))
     if PLOT_RE.search(text):
         m = DUR_RE.search(text)
         minutes = 120
