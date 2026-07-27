@@ -104,14 +104,23 @@ def _conn():
 
 
 def _latest(cur):
-    cur.execute("SELECT time, weight, temp, humidity "
-                "FROM scale_readings ORDER BY time DESC LIMIT 1")
-    return cur.fetchone()
+    # Latest reading for time/temp/humidity, plus the latest VALID (non-negative)
+    # weight — negative weight is a bad scale reading and is ignored everywhere.
+    cur.execute("SELECT time, temp, humidity FROM scale_readings ORDER BY time DESC LIMIT 1")
+    row = cur.fetchone()
+    if row is None:
+        return None
+    ts, temp, humidity = row
+    cur.execute("SELECT weight FROM scale_readings "
+                "WHERE weight >= 0 ORDER BY time DESC LIMIT 1")
+    w = cur.fetchone()
+    weight = w[0] if w else None
+    return (ts, weight, temp, humidity)
 
 
 def _weight_ago(cur, minutes):
     cur.execute("SELECT weight FROM scale_readings "
-                "WHERE time <= now() - (%s || ' minutes')::interval "
+                "WHERE weight >= 0 AND time <= now() - (%s || ' minutes')::interval "
                 "ORDER BY time DESC LIMIT 1", (minutes,))
     r = cur.fetchone()
     return r[0] if r else None
@@ -211,9 +220,11 @@ def plot_quantity(column: str, label: str, unit: str, minutes: float = 120) -> t
                 rows = [(t, dew_point(tp, h)) for t, tp, h in cur.fetchall()]
                 rows = [r for r in rows if r[1] is not None]
             else:
+                # For weight, exclude negative/NULL (bad scale readings).
+                extra = " AND weight >= 0" if column == "weight" else ""
                 cur.execute(f"SELECT time, {column} FROM scale_readings "
                             "WHERE time >= now() - (%s || ' minutes')::interval "
-                            "ORDER BY time", (minutes,))
+                            f"AND {column} IS NOT NULL{extra} ORDER BY time", (minutes,))
                 rows = cur.fetchall()
     finally:
         conn.close()

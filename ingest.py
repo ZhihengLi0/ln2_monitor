@@ -81,12 +81,19 @@ def main():
         new_offset -= len(partial.encode("utf-8"))
 
     rows = []
+    neg = 0
     for line in lines:
         m = LINE_RE.match(line.strip())
         if not m:
             continue
+        weight = float(m.group(2))
+        if weight < 0:            # negative weight is a bad reading — store NULL
+            weight = None         # (keep temp/humidity from the same line)
+            neg += 1
         ts = datetime.strptime(m.group(1), "%Y-%m-%d %H:%M:%S").replace(tzinfo=LOCAL_TZ)
-        rows.append((ts, float(m.group(2)), float(m.group(3)), float(m.group(4))))
+        rows.append((ts, weight, float(m.group(3)), float(m.group(4))))
+    if neg:
+        log.info(f"{neg} reading(s) had negative weight → stored as NULL")
 
     if rows:
         conn = psycopg2.connect(host=config.PG_HOST, port=config.PG_PORT,

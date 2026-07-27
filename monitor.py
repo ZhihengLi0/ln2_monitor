@@ -113,10 +113,17 @@ def local_conn():
 
 
 def latest_reading(conn):
+    # time/temp/humidity from the newest row; weight from the newest VALID
+    # (non-negative) reading — negative weight is a bad scale reading, ignored.
     with conn.cursor() as cur:
-        cur.execute("SELECT time, weight, temp, humidity "
-                    "FROM scale_readings ORDER BY time DESC LIMIT 1")
-        return cur.fetchone()
+        cur.execute("SELECT time, temp, humidity FROM scale_readings ORDER BY time DESC LIMIT 1")
+        row = cur.fetchone()
+        if row is None:
+            return None
+        ts, temp, humidity = row
+        cur.execute("SELECT weight FROM scale_readings WHERE weight >= 0 ORDER BY time DESC LIMIT 1")
+        w = cur.fetchone()
+        return (ts, w[0] if w else None, temp, humidity)
 
 
 # ── Checks ─────────────────────────────────────────────────────────────────────
