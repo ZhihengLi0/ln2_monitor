@@ -4,3 +4,4 @@ __pycache__/
 *.png
 *_state.json
 ingest_state.json
+*.tmp
