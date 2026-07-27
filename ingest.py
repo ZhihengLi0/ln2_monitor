@@ -80,35 +80,58 @@ def main():
         partial = lines.pop()        # incomplete final line — leave for next run
         new_offset -= len(partial.encode("utf-8"))
 
-    rows = []
-    neg = 0
+    # Parse lines first; DB filtering (spike detection) happens below once we know
+    # the last valid weight for continuity across runs.
+    parsed = []
     for line in lines:
         m = LINE_RE.match(line.strip())
         if not m:
             continue
-        weight = float(m.group(2))
-        if weight < 0:            # negative weight is a bad reading — store NULL
-            weight = None         # (keep temp/humidity from the same line)
-            neg += 1
         ts = datetime.strptime(m.group(1), "%Y-%m-%d %H:%M:%S").replace(tzinfo=LOCAL_TZ)
-        rows.append((ts, weight, float(m.group(3)), float(m.group(4))))
-    if neg:
-        log.info(f"{neg} reading(s) had negative weight → stored as NULL")
+        parsed.append((ts, float(m.group(2)), float(m.group(3)), float(m.group(4))))
 
-    if rows:
-        conn = psycopg2.connect(host=config.PG_HOST, port=config.PG_PORT,
-                                user=config.PG_USER, password=config.PG_PASSWORD,
-                                dbname=config.PG_DB, connect_timeout=5)
-        try:
-            with conn.cursor() as cur:
-                cur.executemany(
-                    "INSERT INTO scale_readings (time, weight, temp, humidity) "
-                    "VALUES (%s, %s, %s, %s)", rows)
-            conn.commit()
-        finally:
-            conn.close()
-        log.info(f"Ingested {len(rows)} reading(s); offset {offset} → {new_offset}")
+    if not parsed:
+        save_offset(new_offset)
+        return
 
+    conn = psycopg2.connect(host=config.PG_HOST, port=config.PG_PORT,
+                            user=config.PG_USER, password=config.PG_PASSWORD,
+                            dbname=config.PG_DB, connect_timeout=5)
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT weight FROM scale_readings WHERE weight >= 0 "
+                        "ORDER BY time DESC LIMIT 1")
+            r = cur.fetchone()
+        last_valid = r[0] if r else None
+
+        max_jump = getattr(config, "WEIGHT_MAX_JUMP", 5.0)
+        rows, neg, spike, streak = [], 0, 0, 0
+        for ts, weight, temp, humidity in parsed:
+            if weight < 0:                      # impossible → NULL
+                weight = None; neg += 1
+            elif last_valid is not None and abs(weight - last_valid) > max_jump:
+                streak += 1
+                if streak >= 4:                 # sustained new level → accept baseline
+                    last_valid = weight; streak = 0
+                else:                           # transient spike → NULL
+                    weight = None; spike += 1
+            else:
+                last_valid = weight; streak = 0
+            rows.append((ts, weight, temp, humidity))
+
+        with conn.cursor() as cur:
+            cur.executemany(
+                "INSERT INTO scale_readings (time, weight, temp, humidity) "
+                "VALUES (%s, %s, %s, %s)", rows)
+        conn.commit()
+    finally:
+        conn.close()
+
+    dropped = []
+    if neg:   dropped.append(f"{neg} negative")
+    if spike: dropped.append(f"{spike} spike(>{max_jump}kg)")
+    log.info(f"Ingested {len(rows)} reading(s); offset {offset} → {new_offset}"
+             + (f"; dropped weight: {', '.join(dropped)}" if dropped else ""))
     save_offset(new_offset)
 
 
