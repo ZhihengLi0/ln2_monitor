@@ -38,7 +38,24 @@ LN2_RE = re.compile(
 # Does the request ask for a plot / trend?
 PLOT_RE = re.compile(r"\bplot\b|\bgraph\b|\btrend\b|\bchart\b|图|曲线|趋势", re.IGNORECASE)
 # Duration like 2h / 30min / 3 days
-DUR_RE = re.compile(r"(\d+(?:\.\d+)?)\s*(days?|d|hours?|hrs?|h|minutes?|mins?|min|m)\b", re.I)
+# number + unit, from minutes up to years (longer words first so month≠minute)
+DUR_RE = re.compile(
+    r"(\d+(?:\.\d+)?)\s*"
+    r"(years?|yrs?|y|months?|mos?|mo|weeks?|wks?|w|days?|d|"
+    r"hours?|hrs?|hr|h|minutes?|mins?|min|m)\b",
+    re.I,
+)
+
+
+def _unit_to_minutes(n: float, unit: str) -> float:
+    """Convert a number + unit to minutes. Supports minute→year."""
+    u = unit.lower()
+    if u.startswith("y"):   return n * 525600   # 365 days
+    if u.startswith("mo"):  return n * 43200    # 30 days
+    if u.startswith("w"):   return n * 10080    # 7 days
+    if u.startswith("d"):   return n * 1440
+    if u.startswith("h"):   return n * 60
+    return n                                     # minutes
 # Silence / mute the LN2 alarms
 SILENCE_RE = re.compile(r"silence|mute|quiet|snooze|stop.*alert|静音|安静|别报|停止", re.IGNORECASE)
 UNSILENCE_RE = re.compile(r"unsilence|unmute|resume|un-?silence|恢复|取消静音|解除", re.IGNORECASE)
@@ -47,17 +64,12 @@ STATE_FILE = Path(__file__).parent / "monitor_state.json"
 
 
 def _parse_duration_minutes(text: str):
-    """Minutes from a phrase like '2h', '30 min', '2 days'. Default 120 if a
-    silence keyword is present but no duration. Returns None if unparseable."""
+    """Minutes from a phrase like '2h', '30 min', '3 weeks', '6 months', '1 year'.
+    Default 120 if no duration is found."""
     m = DUR_RE.search(text)
     if not m:
         return 120.0
-    n, unit = float(m.group(1)), m.group(2).lower()
-    if unit.startswith("d"):
-        return n * 1440
-    if unit.startswith("h") or unit.startswith("hr"):
-        return n * 60
-    return n
+    return _unit_to_minutes(float(m.group(1)), m.group(2))
 
 
 def silence_alarms(minutes: float) -> str:
@@ -260,10 +272,7 @@ def handle(text: str):
         return "text", silence_alarms(_parse_duration_minutes(text))
     if PLOT_RE.search(text):
         m = DUR_RE.search(text)
-        minutes = 120
-        if m:
-            n, unit = float(m.group(1)), m.group(2).lower()
-            minutes = n * (1440 if unit.startswith("d") else 60 if unit.startswith("h") else 1)
+        minutes = _unit_to_minutes(float(m.group(1)), m.group(2)) if m else 120
         column, label, u = _quantity(text)
         return "plot", plot_quantity(column, label, u, minutes)
     return "text", status_text()
