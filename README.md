@@ -2,38 +2,55 @@
 
 Real-time monitoring and Slack alerting for a **liquid-nitrogen scale** (weight,
 temperature, humidity) read from an Arduino. Runs on the same Raspberry Pi as the
-[BlueFors CS2 monitor](https://github.com/ZhihengLi0/column_monitor) and reuses
-the **same Slack bot and channel**, but is otherwise an independent system with
-its own PostgreSQL database.
+[BlueFors CS2 monitor](https://github.com/ZhihengLi0/column_monitor) and, since
+**v2.0.0 (2026-11-20)**, the alarms and Slack commands are part of that monitor's
+`bfm` package. This repository holds the reader service and the schema.
 
 ---
 
 ## Architecture
 
 ```
-Arduino (scale)  →  /home/cdms/arduino_data.txt   (one line every ~5 s)
-                        │  ingest.py   (cron, every minute)
-                        ▼
-                 PostgreSQL  ln2 . scale_readings
-                        │  monitor.py  (cron, every minute)  → alerts
-                        │  ln2_query.py (called by the shared Slack responder)
-                        ▼
-                     Slack  (shared BlueFors bot + channel)
+Arduino (scale, TCP 172.31.255.80:5000)
+        │  one line every ~5 s
+        ▼
+ln2-reader.service  (ln2_reader.py — systemd, always on)
+        │  INSERT per reading; spool file + replay if PostgreSQL is down
+        ▼
+PostgreSQL  ln2 . scale_readings
+        │
+        ▼
+bluefors-monitor.service  (bfm package: LN2 alarms, `ln2` / `plot ln2 …` commands)
+        │
+        ▼
+Slack  (shared BlueFors bot + channel)
 ```
 
-The Arduino appends lines like:
+The Arduino sends lines like:
 
 ```
 2026-07-07 10:11:57  Weight:0.14,Temp:24.20C,Humidity:51.00%
 ```
 
-- **`ingest.py`** — parses new lines (byte-offset tracking; skips Arduino startup
-  fragments) and inserts them into `ln2.scale_readings`.
-- **`monitor.py`** — reads the latest reading and sends Slack alerts on weight
-  low/critical, temperature out of range, and data staleness. `--status` posts
-  the current reading on demand.
-- **`ln2_query.py`** — answers natural-language Slack queries (current reading,
-  weight plot). Imported by the BlueFors Slack responder.
+### `ln2_reader.py`
+
+* TCP client with a 60 s socket timeout, TCP keepalive and reconnect back-off
+  (the old reader spun at 100 % CPU after the Arduino dropped the connection).
+* Parses each line, rejects negative weights and jumps > 5 kg (Arduino start-up
+  fragments), inserts directly into `scale_readings`.
+* If the database is unreachable the reading goes to
+  `/mnt/harddrive/pi/logs/ln2_spool.txt` and is replayed when it is back —
+  no gap in the data.
+* `Type=notify` + `WatchdogSec=600`: no reading for 10 min → systemd restarts it.
+
+```bash
+systemctl status ln2-reader
+journalctl -u ln2-reader -n 30
+sudo systemctl restart ln2-reader      # after editing ln2_reader.py
+```
+
+The unit file lives in the BlueFors repo: `bluefors_monitor/deploy/ln2-reader.service`
+(installed by `deploy/install.sh`).
 
 ## Database
 
@@ -52,38 +69,29 @@ CREATE INDEX idx_scale_time ON scale_readings (time DESC);
 
 Connect: `psql -h localhost -U postgres -d ln2` (credentials shared with `cs2`).
 
-## Slack commands
+## Slack commands (handled by `bfm/commands/ln2.py`)
 
 All via `@BlueFors-Alert` in the shared channel — natural language works:
 
 | Command | Description |
 |---|---|
 | `ln2` · `how much liquid nitrogen` · `液氮还剩多少` · `weight` | Current weight, temperature, humidity, **dew point** + 1-hour weight trend |
-| `plot ln2 weight 6h` · `液氮曲线 2h` | Weight-vs-time chart (min / hour / day) |
-| `plot ln2 temperature 2h` · `plot ln2 humidity` · `plot ln2 dewpoint` | Plot temperature / humidity / dew point vs time |
+| `plot ln2 weight 6h` · `液氮曲线 2h` | Weight-vs-time chart |
+| `plot ln2 temperature 2h` · `plot ln2 humidity` · `plot ln2 dewpoint` | Temperature / humidity / dew point vs time |
+| `silence ln2 2h` · `unsilence ln2` | Mute / unmute all LN2 alarms |
 
-Keywords that route to this system: `ln2`, `nitrogen`, `weight`, `scale`, 液氮,
-氮, 秤, 重量, 称重.
-
-## Alerts
-
-Checked every minute (to the shared Slack channel):
+## Alerts (handled by `bfm/alarms.py`, thresholds in `bfm/config.py`)
 
 | Alert | Condition | Config key |
 |---|---|---|
-| LN2 weight low (warning) | weight < `WEIGHT_LOW` | `WEIGHT_LOW` |
-| LN2 weight critical | weight < `WEIGHT_CRITICAL` | `WEIGHT_CRITICAL` |
-| Temperature high / low | temp out of `[TEMP_LOW, TEMP_HIGH]` | `TEMP_HIGH`, `TEMP_LOW` |
-| Data stale | no new reading for `DATA_STALE_MINUTES` | `DATA_STALE_MINUTES` |
+| LN2 weight low (warning) | weight < `LN2_WEIGHT_LOW` | `LN2_WEIGHT_LOW` |
+| LN2 weight critical | weight < `LN2_WEIGHT_CRITICAL` | `LN2_WEIGHT_CRITICAL` |
+| Temperature high / low | temp out of `[LN2_TEMP_LOW, LN2_TEMP_HIGH]` | `LN2_TEMP_*` |
+| Dew point | dew point above the room-condensation limit | `LN2_DEW_POINT_HIGH` |
+| Data stale | no new reading for `LN2_DATA_STALE_MINUTES` | `LN2_DATA_STALE_MINUTES` |
 
-Same alert repeats at most every `ALERT_COOLDOWN_MINUTES`. Set a threshold to
-`None` to disable that check. Thresholds live in **`ln2_config.py`**.
-
-## Configuration
-
-`ln2_config.py` holds all settings. It contains **no secrets** — the DB password
-and Slack token are imported from the BlueFors `config_secret.py` (git-ignored,
-local only), so nothing sensitive is committed here.
+Same cooldown, silence and ✅ Cleared behaviour as every other alarm in the
+BlueFors monitor.
 
 ## Setup
 
@@ -92,19 +100,20 @@ local only), so nothing sensitive is committed here.
 psql -h localhost -U postgres -c "CREATE DATABASE ln2;"
 psql -h localhost -U postgres -d ln2 -f schema.sql
 
-# 2. Install cron jobs (ingest + monitor, every minute)
-crontab -e
-#   * * * * * python3 /home/cdms/ln2_monitor/ingest.py  >> /home/cdms/ln2_monitor/ingest.log  2>&1
-#   * * * * * python3 /home/cdms/ln2_monitor/monitor.py  >> /home/cdms/ln2_monitor/monitor.log 2>&1
+# 2. Install the service (from the BlueFors repo)
+/home/cdms/bluefors_monitor/deploy/install.sh
 ```
 
 ## Files
 
 | File | Description |
 |---|---|
-| `ingest.py` | Parse the Arduino text file → `scale_readings` (cron) |
-| `monitor.py` | Alert monitor + `--status` (cron) |
-| `ln2_query.py` | Natural-language Slack query/plot helpers |
-| `ln2_config.py` | Thresholds, DB, Slack channel (no secrets) |
+| `ln2_reader.py` | Arduino TCP → PostgreSQL reader (systemd service) |
 | `schema.sql` | Database schema |
-| `*.log`, `*_state.json`, `*.png` | Runtime artefacts (git-ignored) |
+
+## History
+
+| Version | Description |
+|---|---|
+| 1.x | `read_arduino.py` → `arduino_data.txt` → `ingest.py` (cron) → `monitor.py` (cron) + `ln2_query.py` imported by the BlueFors responder. Tag `v1.1.1-legacy`. |
+| 2.0.0 | Reader rewritten as a supervised service writing straight to PostgreSQL with spool/replay; alarms, commands and thresholds merged into the BlueFors `bfm` package (one state, one Slack queue). |
